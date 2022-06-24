@@ -93,6 +93,7 @@
 			var GB = 1000000000;
 
 			var bucketUrl = 'https://s3.amazonaws.com/' + window.location.hostname;
+			var friendlyUrl = 'https://' + window.location.hostname + '/';
 			var compiledTemplate;
 
 			// return e.g. 1.2KB, 1.3MB, 2GB, etc.
@@ -122,7 +123,7 @@
 				// init logic
 				self.isFolder = FOLDER_PATTERN.test(self.key);
 				self.filename = self.isFolder ? self.key.replace(FOLDER_PATTERN, '') : self.key;
-				self.url = bucketUrl + '/' + self.key;
+				self.url = friendlyUrl + self.key;
 				self.levels = self.filename.split('/');
 				self.numLevels = self.levels.length;
 				self.simpleFilename = self.levels[self.numLevels - 1];
@@ -136,7 +137,7 @@
 				var listBucketResult = $(xml).find('ListBucketResult');
 
 				// set a reasonable title instead of "Bucket loading"
-				var title = 'Index of bucket "' + listBucketResult.find('Name').text() + '"';
+				var title = 'Index of "' + listBucketResult.find('Name').text() + '"';
 				document.title = title;
 				$('#h1-title').text(title);
 
