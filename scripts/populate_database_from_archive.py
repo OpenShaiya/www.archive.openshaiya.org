@@ -18,6 +18,9 @@ FULLCLIENT_REGEX = re.compile(r"(ep)(\d*\.?\d*)")
 # The retained files, which are not in the data folder.
 RETAINED_FILES = [".ini", ".dll", ".txt", ".exe"]
 
+# The valid distributions
+ORIGINAL_DISTRIBUTIONS = ["us", "de", "pt", "ga", "es"]
+
 # The valid distributions, and their paths
 DISTRIBUTIONS = [
     ("us", "archive/shaiya-us/patches", False),
@@ -32,12 +35,13 @@ DISTRIBUTIONS = [
     ("fr", "archive/shaiya-fr/clients", True),
     ("kr", "archive/shaiya-kr/clients", True),
     ("px", "archive/shaiya-phoenix/clients", True),
-    ("ru", "archive/shaiya-ru/clients", True)
+    ("ru", "archive/shaiya-ru/clients", True),
 ]
 
 # The query for inserting to the files table.
 INSERT_FILE_QUERY = """
-INSERT INTO public.files (distribution, patch, date, fileid) VALUES (
+INSERT INTO public.files (distribution, patch, path, date, fileid) VALUES (
+            %s,
             %s,
             %s,
             %s,
@@ -47,7 +51,7 @@ INSERT INTO public.files (distribution, patch, date, fileid) VALUES (
 
 # The query for inserting to the filedata table.
 INSERT_FILEDATA_QUERY = """
-INSERT INTO public.filedata (path, checksum, data) VALUES (
+INSERT INTO public.filedata (checksum, uncompressed_size, data) VALUES (
             %s,
             %s,
             %s
@@ -55,7 +59,8 @@ INSERT INTO public.filedata (path, checksum, data) VALUES (
 """
 
 # The query for selecting from the filedata table.
-SELECT_FILEDATA_QUERY = "SELECT id FROM public.filedata WHERE path = %s AND checksum = %s;"
+SELECT_FILEDATA_QUERY = "SELECT id FROM public.filedata WHERE checksum = %s;"
+
 
 # Collects a distribution's files.
 def collect_distribution(path, fullclient):
@@ -98,6 +103,13 @@ def collect_distribution(path, fullclient):
             year = int(matches.group(4))
             date = datetime.datetime(year, month, day)
 
+        entries.extend(collect_base(root, patch, date))
+    return entries
+
+
+def collect_base(path, patch, date):
+    entries = []
+    for root, dirs, files in os.walk(path):
         if "data" in root:
             files = [file for file in files if not file.endswith(".patch") and file != "game.exe"]
             for file in files:
@@ -107,19 +119,19 @@ def collect_distribution(path, fullclient):
                 entries.append(
                     {
                         "abspath": abspath,
-                        "path": f"data/{relfile}",
+                        "path": f"data/{relfile}".lower(),
                         "patch": patch,
                         "date": date,
                     }
                 )
         else:
-            files = [file for file in files if file.endswith(tuple(RETAINED_FILES))]
+            files = [file for file in files if file.lower().endswith(tuple(RETAINED_FILES))]
             for file in files:
                 abspath = os.path.join(root, file)
                 entries.append(
                     {
                         "abspath": abspath,
-                        "path": file,
+                        "path": file.lower(),
                         "patch": patch,
                         "date": date,
                     }
@@ -127,36 +139,50 @@ def collect_distribution(path, fullclient):
     return entries
 
 
+def populate_database(connection, dists, entries):
+    cursor = connection.cursor()
+
+    for entry in entries:
+        # For each entry, read the file data, compute a checksum, and compress the data
+        infile = open(entry["abspath"], "rb")
+        data = infile.read()
+        crc32 = zlib.crc32(data)
+        infile.close()
+        uncompressed_size = len(data)
+        compressed_data = zlib.compress(data)
+
+        # Insert the file data.
+        cursor.execute(INSERT_FILEDATA_QUERY, (crc32, uncompressed_size, compressed_data))
+        connection.commit()
+
+        # Get the filedata id
+        cursor.execute(SELECT_FILEDATA_QUERY, (crc32,))
+        rows = cursor.fetchall()
+        fileid = rows[0][0]
+
+        # Insert the file entry for every distribution
+        for dist in dists:
+            print(f"fileid={fileid}, path={entry['path']}, dist={dist}, checksum={crc32}, patch={entry['patch']}, "
+                  f"date={entry['date']}")
+            # Insert the file entry
+            cursor.execute(INSERT_FILE_QUERY, (dist, entry["patch"], entry["path"], entry["date"], fileid))
+
+    connection.commit()
+
+
 if __name__ == "__main__":
     # Connect to the pgsql database
     connection = psycopg2.connect(user="postgres", password="postgres", host="localhost", port="5432",
                                   database="shaiyaarchive")
 
+    # Populate the data from the US base client into all `original` distributions, as patch 0.
+    baseclient = collect_base("archive/shaiya-us/original", 0, datetime.datetime(2007, 12, 18))
+    populate_database(connection, ORIGINAL_DISTRIBUTIONS, baseclient)
+
     # Populate the distributions. This inserts files one by one. While this is very slow, at least
     # it doesn't crash our machine from the insane amount of data being parsed.
     for dist, path, fullclient in DISTRIBUTIONS:
-        for entry in collect_distribution(path, fullclient):
-            # For each entry, read the file data, compute a checksum, and compress the data
-            infile = open(entry["abspath"], "rb")
-            data = infile.read()
-            crc32 = zlib.crc32(data)
-            infile.close()
-            compressed_data = zlib.compress(data)
-            cursor = connection.cursor()
+        entries = collect_distribution(path, fullclient)
+        populate_database(connection, [dist], entries)
 
-            # Insert the file data.
-            cursor.execute(INSERT_FILEDATA_QUERY, (entry["path"], crc32, compressed_data))
-            connection.commit()
-
-            # Get the filedata id
-            cursor.execute(SELECT_FILEDATA_QUERY, (entry["path"], crc32))
-            rows = cursor.fetchall()
-            fileid = rows[0][0]
-            print(f"fileid={fileid}, path={entry['path']}, dist={dist}, checksum={crc32}, patch={entry['patch']}, "
-                  f"date={entry['date']}")
-
-            # Insert the file entry
-            cursor.execute(INSERT_FILE_QUERY, (dist, entry["patch"], entry["date"], fileid))
-
-    # Commit the files
-    connection.commit()
+    # TODO: The last patch of the `US` distribution should be entered as `GA`'s baseline client (patch 0).
