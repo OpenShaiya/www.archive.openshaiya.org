@@ -7,7 +7,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::os::unix::prelude::OsStrExt;
 use std::path::{Path, PathBuf};
 use zip::{DateTime, ZipArchive};
@@ -35,8 +35,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Create the output directory.
-    fs::create_dir_all(&args.inflate_dir)?;
+    // Create the output directories.
+    let patch_dir = args.inflate_dir.join("patches");
+    let client_dir = args.inflate_dir.join("clients");
+    fs::create_dir_all(&patch_dir)?;
+    fs::create_dir_all(&client_dir)?;
 
     // Collect all of the patch files in the input directory.
     let patches = fs::read_dir(&args.patch_dir)?
@@ -48,12 +51,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Iterate over each patch and inflate it.
     patches.par_iter().for_each(|path| {
-        inflate_patch(path, &args.inflate_dir).expect("failed to inflate patch");
+        inflate_patch(path, &patch_dir, &client_dir).expect("failed to inflate patch");
     });
     Ok(())
 }
 
-fn inflate_patch(path: &Path, out: &Path) -> anyhow::Result<()> {
+fn inflate_patch(path: &Path, patch_dir: &Path, client_dir: &Path) -> anyhow::Result<()> {
     let re = Regex::new(r"(ps\d{4})")?;
     let captures = re.captures(path.to_str().unwrap()).unwrap();
 
@@ -78,22 +81,30 @@ fn inflate_patch(path: &Path, out: &Path) -> anyhow::Result<()> {
     let patch_name = format!("{}-{}-{}-{}", patch, date.day(), date.month(), date.year());
 
     // Create the output directory.
-    let out_dir = out.join(&patch_name);
-    fs::create_dir_all(&out_dir)?;
+    let patch_out_dir = patch_dir.join(&patch_name);
+    fs::create_dir_all(&patch_out_dir)?;
 
     // Extract the contents of the patch, to the destination
-    zip_extract::extract(BufReader::new(&file), &out_dir, true).map_err(|e| anyhow!(e))?;
+    zip_extract::extract(BufReader::new(&file), &patch_out_dir, true).map_err(|e| anyhow!(e))?;
 
     // If the patch contains an archive filesystem, we'll extract it.
-    let header_file = out_dir.join("update.sah");
-    let data_file = out_dir.join("update.saf");
+    let header_file = patch_out_dir.join("update.sah");
+    let data_file = patch_out_dir.join("update.saf");
     if header_file.is_file() {
         let fs = libclient::fs::Filesystem::from_archive(&header_file, &data_file)?;
-        fs.extract(&out_dir.join("data"))?;
+        fs.extract(&patch_out_dir.join("data"))?;
 
         // Delete the archive files.
         fs::remove_file(&header_file)?;
         fs::remove_file(&data_file)?;
+    }
+
+    // If the patch contains a game client, we'll create a copy in the `client_dir`
+    let client_file = patch_out_dir.join("game.exe");
+    if client_file.is_file() {
+        let client_buf = fs::read(&client_file)?;
+        let mut client = fs::File::create(&client_dir.join(format!("{}-game.exe", patch_name)))?;
+        client.write_all(&client_buf)?;
     }
     Ok(())
 }
