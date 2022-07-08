@@ -1,0 +1,39 @@
+[package]
+name        = "openshaiya-patchinflate"
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["ptr64"]
+
+[[bin]]
+name        = "patchinflate"
+path        = "src/main.rs"
+
+[dependencies.anyhow]
+version     = "1.0"
+
+[dependencies.clap]
+version     = "3.2"
+features    = ["derive"]
+
+[dependencies.libclient]
+git         = "https://github.com/Open-Shaiya/libclient.git"
+rev         = "4ba4d6d"
+
+[dependencies.rayon]
+version     = "1.5"
+
+[dependencies.regex]
+version     = "1.6"
+
+[dependencies.tokio]
+version     = "1.19"
+features    = ["full"]
+
+[dependencies.tracing]
+version     = "0.1"
+
+[dependencies.zip]
+version     = "0.6.2"
+
+[dependencies.zip-extract]
+version     = "0.1.1"
