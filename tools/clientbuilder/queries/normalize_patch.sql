@@ -1,0 +1,1 @@
+SELECT max(patch) FROM files WHERE distribution = ? AND patch <= ?

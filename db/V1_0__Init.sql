@@ -1,17 +1,14 @@
-CREATE TYPE shaiya_distribution AS ENUM('us', 'de', 'pt', 'ga', 'es', 'cn', 'fr', 'kr', 'px', 'ru');
-
 CREATE TABLE filedata (
-    id                  bigint GENERATED ALWAYS AS IDENTITY,
+    id                  integer PRIMARY KEY AUTOINCREMENT ,
     checksum            bigint NOT NULL,
     uncompressed_size   bigint NOT NULL,
-    data                bytea,
-    PRIMARY KEY         (id),
+    key                 text,
     UNIQUE              (checksum)
 );
 
 CREATE TABLE files (
-    id              bigint GENERATED ALWAYS AS IDENTITY,
-    distribution    shaiya_distribution NOT NULL,
+    id              integer PRIMARY KEY AUTOINCREMENT,
+    distribution    text NOT NULL,
     patch           smallint NOT NULL,
     path            text NOT NULL,
     date            date NOT NULL,

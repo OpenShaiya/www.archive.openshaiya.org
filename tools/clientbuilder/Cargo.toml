@@ -1,0 +1,79 @@
+[package]
+name	    = "openshaiya-clientbuilder"
+version	    = "0.1.0"
+edition     = "2021"
+authors     = ["ptr64"]
+
+[lib]
+name        = "clientbuilder"
+path        = "src/lib.rs"
+
+[[bin]]
+name        = "clientbuilder-lambda"
+path        = "src/bin/lambda.rs"
+
+[dependencies.anyhow]
+version     = "1.0"
+
+[dependencies.aws-config]
+version     = "0.15.0"
+
+[dependencies.aws-sdk-s3]
+version     = "0.15.0"
+
+[dependencies.aws-smithy-http]
+version     = "0.45.0"
+features    = ["rt-tokio"]
+
+[dependencies.dotenv]
+version     = "0.15.0"
+
+[dependencies.env_logger]
+version     = "0.9.0"
+
+[dependencies.rust-ini]
+version     = "0.18.0"
+
+[dependencies.lambda_runtime]
+version     = "0.5.1"
+
+[dependencies.libclient]
+git         = "https://github.com/Open-Shaiya/libclient.git"
+rev         = "6ef03bf"
+
+[dependencies.rayon]
+version     = "1.5.3"
+
+[dependencies.serde]
+version     = "1.0.138"
+features    = ["derive"]
+
+[dependencies.strum]
+version     = "0.24.1"
+
+[dependencies.strum_macros]
+version     = "0.24.2"
+
+[dependencies.sqlite]
+version     = "0.26.0"
+
+[dependencies.tokio]
+version     = "1.19.2"
+features    = ["full"]
+
+[dependencies.tracing]
+version     = "0.1"
+
+[dependencies.tracing-subscriber]
+version     = "0.3.14"
+features    = ["env-filter"]
+
+[dependencies.uuid]
+version     = "1.1.2"
+features    = ["v4"]
+
+[dependencies.zip]
+version     = "0.6.2"
+
+[dependencies.zip-extensions]
+version     = "0.6.1"
