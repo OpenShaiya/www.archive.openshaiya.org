@@ -70,13 +70,26 @@ pub async fn build_client(
     fs::write(dest.join("gsconfig.cfg"), &gsconfig)?;
     fs::write(dest.join("version.ini"), &version)?;
 
-    // Read the config.ini file, and add `TEST_IP=ENGLISH`
+    // Read the config.ini file;
     let config_path = dest.join("config.ini");
     let mut config = Ini::load_from_file(&config_path)?;
+
+    // Set the user id, and TEST_IP=ENGLISH (this forces international clients to use gsconfig ip)
     config
         .with_section(Some("LOGIN"))
         .set("ID", "openshaiya")
         .set("TEST_IP", "ENGLISH");
+
+    // Set the user id to save by default
+    config
+        .with_section(Some("INTERFACE"))
+        .set("LOGIN_ID_SAVE", "TRUE");
+
+    // Turn full-screen off my default, to avoid messing with users resolution unintentionally.
+    config
+        .with_section(Some("VIDEO"))
+        .set("FULLSCREEN", "FALSE");
+
     config.write_to_file(&config_path)?;
 
     // Zip the file and remove the source folder.
