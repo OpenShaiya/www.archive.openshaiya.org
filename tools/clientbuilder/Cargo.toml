@@ -47,7 +47,8 @@ version     = "0.5.2"
 version     = "0.5.1"
 
 [dependencies.libclient]
-path        = "/home/cups/shaiya/archive/libclient"
+git         = "https://github.com/Open-Shaiya/libclient"
+rev         = "22827c5"
 
 [dependencies.rayon]
 version     = "1.5.3"

@@ -7,7 +7,7 @@ use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use sqlite::{Connection, State};
 use std::fs;
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use strum_macros::{Display, IntoStaticStr};
