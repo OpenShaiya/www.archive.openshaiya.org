@@ -1,14 +1,18 @@
 use anyhow::anyhow;
+use chrono::NaiveDateTime;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use ini::Ini;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use sqlite::{Connection, State};
 use std::fs;
+use std::fs::{File, Metadata};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use strum_macros::{Display, IntoStaticStr};
+use tar::{Builder, EntryType, Header};
 use uuid::Uuid;
-use zip_extensions::zip_create_from_directory;
 
 pub const AWS_S3_BUCKET: &str = "archive.openshaiya.org";
 
@@ -30,9 +34,11 @@ pub enum Distribution {
 struct ClientFile {
     path: String,
     key: String,
+    uncompressed_size: i64,
+    epoch: u64,
 }
 
-pub async fn build_client(
+pub async fn build_client<'a>(
     conn: &Connection,
     dir: &Path,
     src: &Path,
@@ -43,23 +49,46 @@ pub async fn build_client(
     let dest = create_temp_dir(dir, dist, patch)?;
 
     // Retrieve the relevant files and populate the directory.
+    // TODO: This really shouldn't even be a step (for the `data` directory). We should be able
+    // to just skip this entirely and serialize directly to the data.saf file. That can be an optimisation
+    // for the future, however.
     let collected_files = collect_dist_files(conn, dist, patch).await?;
-    populate_client_directory(collected_files, src, &dest, dist, patch).await?;
+    populate_client_directory(&collected_files, src, &dest, dist, patch).await?;
+
+    // Get the most recent timestamp
+    let most_recent_timestamp = collected_files.iter().map(|f| f.epoch).max().unwrap();
+
+    // Create are gzipped tarball for the file data.
+    let tar_gz = dest.join("game.tar.gz");
+    let tar_gz_file = File::create(&tar_gz)?;
+    let gzip = GzEncoder::new(tar_gz_file, Compression::fast());
+    let mut tar = Builder::new(gzip);
 
     // Create the archive files.
     let fs_header_path = dest.join("data.sah");
-    let fs_data_path = dest.join("data.saf");
     let data_path = dest.join("data");
-    let mut fs_header_file = fs::File::create(&fs_header_path)?;
+    let mut fs_header_file = File::create(&fs_header_path)?;
 
-    // Build the archive, deleting the source file.
+    let total_uncompressed_size: usize = collected_files
+        .par_iter()
+        .map(|f| f.uncompressed_size as usize)
+        .sum();
+
+    // Build the data file in memory, and then copy it to the file stream.
+    let mut data_buf: Vec<u8> = Vec::with_capacity(total_uncompressed_size);
     let fs = libclient::fs::Filesystem::from_path(&data_path)?;
-    let data_buf = fs.build_with_destination(&mut fs_header_file)?;
+    fs.build_with_destination(&mut fs_header_file, &mut data_buf)?;
+    compress_file(
+        &mut tar,
+        "data.saf",
+        &data_buf,
+        data_buf.len(),
+        most_recent_timestamp,
+    )?;
 
-    // Delete the `data` folder and write the data file.
+    // Delete the data directory.
+    tracing::info!(?data_path, "deleting data path to reclaim disk space...");
     fs::remove_dir_all(&data_path)?;
-    fs::write(&fs_data_path, &data_buf)?;
-    drop(data_buf);
 
     // Write the config files.
     let gsconfig = GSCONFIG_TEMPLATE.replace(
@@ -92,10 +121,41 @@ pub async fn build_client(
 
     config.write_to_file(&config_path)?;
 
-    // Zip the file and remove the source folder.
-    let zipped = zip(&dest, dir, &object_name(dist, patch)).await?;
-    fs::remove_dir_all(&dest)?;
-    Ok(zipped)
+    // Collect all of the files in the root destination directory, and add them to the archive.
+    tracing::info!("adding misc files to archive...");
+    fs::read_dir(&dest)?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|e| e.is_file() && e.to_str().unwrap() != tar_gz.to_str().unwrap())
+        .for_each(|path| {
+            let filename = path.file_name().expect("no file").to_str().unwrap();
+            tracing::info!(filename, "appending file");
+
+            // Read the file data and write it to the archive
+            let buf = fs::read(&path).expect("failed to read file data");
+            compress_file(&mut tar, filename, &buf, buf.len(), most_recent_timestamp)
+                .expect("failed to add file to archive");
+        });
+    tar.finish()?;
+    Ok(tar_gz)
+}
+
+fn compress_file<D: Write>(
+    archive: &mut Builder<D>,
+    name: &str,
+    data: &[u8],
+    data_len: usize,
+    timestamp: u64,
+) -> anyhow::Result<()> {
+    let mut header = Header::new_gnu();
+    header.set_size(data_len as u64);
+    header.set_path(name)?;
+    header.set_mtime(timestamp);
+    header.set_entry_type(EntryType::Regular);
+    header.set_mode(777);
+    header.set_cksum();
+    archive.append(&header, data)?;
+    Ok(())
 }
 
 /// Get the formatted name of a distribution for a given patch number.
@@ -133,7 +193,17 @@ async fn collect_dist_files(
     while let State::Row = statement.next()? {
         let path = statement.read::<String>(0)?;
         let key = statement.read::<String>(1)?;
-        files.push(ClientFile { path, key });
+        let uncompressed_size = statement.read::<i64>(2)?;
+        let date = statement.read::<String>(3)?;
+
+        let date = NaiveDateTime::parse_from_str(&date, "%Y-%m-%d %H:%M:%S")?;
+
+        files.push(ClientFile {
+            path,
+            key,
+            uncompressed_size,
+            epoch: date.timestamp() as u64,
+        });
     }
 
     Ok(files)
@@ -148,7 +218,7 @@ async fn collect_dist_files(
 /// * `dist`    - The client distribution.
 /// * `patch`   - The requested patch.
 async fn populate_client_directory(
-    files: Vec<ClientFile>,
+    files: &[ClientFile],
     src: &Path,
     dest: &Path,
     dist: Distribution,
@@ -157,7 +227,7 @@ async fn populate_client_directory(
     files
         .par_iter()
         .map(|file| {
-            let ClientFile { path, key } = &file;
+            let ClientFile { path, key, .. } = &file;
             let path = dest.join(&path);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -168,16 +238,10 @@ async fn populate_client_directory(
 
             let mut dst = fs::File::create(&path)?;
             dst.write_all(&data)?;
-            tracing::info!(?path, %key, %dist, patch, "wrote file");
+            tracing::trace!(?path, %key, %dist, patch, "wrote file");
             Ok(())
         })
         .collect::<anyhow::Result<()>>()
-}
-
-async fn zip(src: &Path, dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
-    let archive_file = dir.join(format!("{}.zip", name));
-    zip_create_from_directory(&archive_file, &src.to_path_buf())?;
-    Ok(archive_file)
 }
 
 /// Normalizes a patch number for a specified distribution. If `patch` does not exist for a
