@@ -84,6 +84,12 @@ fn inflate_patch(path: &Path, patch_dir: &Path, client_dir: &Path) -> anyhow::Re
     let patch_out_dir = patch_dir.join(&patch_name);
     fs::create_dir_all(&patch_out_dir)?;
 
+    // Copy the patch file, to the patch directory.
+    fs::copy(
+        path,
+        patch_out_dir.join(path.file_name().unwrap().to_str().unwrap()),
+    )?;
+
     // Extract the contents of the patch, to the destination
     zip_extract::extract(BufReader::new(&file), &patch_out_dir, true).map_err(|e| anyhow!(e))?;
 
